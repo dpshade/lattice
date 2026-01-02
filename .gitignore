@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+*.tsbuildinfo
+
+# Lockfiles (optional - remove if you want to track)
+bun.lock
+
+# OS files
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Test coverage
+coverage/
+
+# Generated configs (users generate their own)
+.opencode/
