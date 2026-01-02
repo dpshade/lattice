@@ -207,6 +207,32 @@ function mapAgentName(latticeName: string): string | undefined {
   return mappings[latticeName];
 }
 
+async function installPlugins(plugins: string[], configDir: string): Promise<void> {
+  const packageJsonPath = join(configDir, "package.json");
+  
+  if (!existsSync(packageJsonPath)) {
+    writeFileSync(packageJsonPath, JSON.stringify({ dependencies: {} }, null, 2));
+  }
+
+  for (const plugin of plugins) {
+    console.log(`  Installing ${plugin}...`);
+    const proc = Bun.spawn(["bun", "add", plugin], {
+      cwd: configDir,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    
+    const exitCode = await proc.exited;
+    
+    if (exitCode === 0) {
+      console.log(`  ✓ Installed ${plugin}`);
+    } else {
+      const stderr = await new Response(proc.stderr).text();
+      console.error(`  ✗ Failed to install ${plugin}: ${stderr}`);
+    }
+  }
+}
+
 export async function generate(): Promise<void> {
   const projectDir = process.cwd();
   const globalConfigDir = join(homedir(), ".config", "opencode");
@@ -273,17 +299,11 @@ export async function generate(): Promise<void> {
   writeFileSync(omoJsonPath, JSON.stringify(mergedOmo, null, 2));
   console.log(`  ✓ Generated ${omoJsonPath}`);
 
-  // Install plugins if specified
   if (config.plugins && config.plugins.length > 0) {
-    console.log("\nPlugins to install:");
-    for (const plugin of config.plugins) {
-      console.log(`  - ${plugin}`);
-    }
-    console.log("\nRun the following to install plugins:");
-    console.log(`  cd ~/.config/opencode && bun add ${config.plugins.join(" ")}`);
+    console.log("\nInstalling plugins...");
+    await installPlugins(config.plugins, globalConfigDir);
   }
 
-  // Summary
   console.log("\n✓ Configuration generated successfully!");
 
   if (mcpServers) {

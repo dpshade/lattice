@@ -215,42 +215,78 @@ async function cloneFromLocal(source: string, targetDir: string): Promise<void> 
   const absolutePath = sourcePath.startsWith("/") ? sourcePath : join(process.cwd(), sourcePath);
 
   if (!existsSync(absolutePath)) {
-    throw new Error(`Source directory not found: ${absolutePath}`);
+    throw new Error(`Source not found: ${absolutePath}`);
   }
 
-  console.log(`Copying workflow from: ${absolutePath}`);
+  const stat = statSync(absolutePath);
+  
+  if (stat.isFile()) {
+    console.log(`Copying workflow from: ${absolutePath}`);
+    copyFileSync(absolutePath, join(targetDir, "lattice.yaml"));
+    console.log("  ✓ Copied lattice.yaml");
+    
+    const content = readFileSync(absolutePath, "utf-8");
+    await extractEmbeddedContent(content, targetDir);
+    return;
+  }
 
-  // Copy lattice.yaml
+  console.log(`Copying workflow from directory: ${absolutePath}`);
+
   const latticeYaml = existsSync(join(absolutePath, "lattice.yaml"))
     ? join(absolutePath, "lattice.yaml")
-    : join(absolutePath, "lattice.yml");
+    : existsSync(join(absolutePath, "lattice.yml"))
+    ? join(absolutePath, "lattice.yml")
+    : null;
 
-  if (!existsSync(latticeYaml)) {
+  if (!latticeYaml) {
     throw new Error(`No lattice.yaml found in ${absolutePath}`);
   }
 
   copyFileSync(latticeYaml, join(targetDir, "lattice.yaml"));
   console.log("  ✓ Copied lattice.yaml");
 
-  // Copy agents directory
-  const agentsDir = join(absolutePath, "agents");
-  if (existsSync(agentsDir)) {
-    const targetAgentsDir = join(targetDir, "agents");
-    mkdirSync(targetAgentsDir, { recursive: true });
+  const content = readFileSync(latticeYaml, "utf-8");
+  await extractEmbeddedContent(content, targetDir);
+}
 
-    for (const file of readdirSync(agentsDir)) {
-      if (file.endsWith(".md")) {
-        copyFileSync(join(agentsDir, file), join(targetAgentsDir, file));
-        console.log(`  ✓ Copied agents/${file}`);
-      }
+async function extractEmbeddedContent(yamlContent: string, targetDir: string): Promise<void> {
+  const { parse } = await import("yaml");
+  const config = parse(yamlContent);
+  
+  if (!config.embedded) return;
+
+  if (config.embedded.agents) {
+    const agentsDir = join(targetDir, "agents");
+    mkdirSync(agentsDir, { recursive: true });
+    
+    for (const [name, content] of Object.entries(config.embedded.agents)) {
+      const filename = name.endsWith(".md") ? name : `${name}.md`;
+      writeFileSync(join(agentsDir, filename), content as string);
+      console.log(`  ✓ Extracted agents/${filename}`);
     }
   }
 
-  // Copy lattice.local.yaml if exists
-  const localYaml = join(absolutePath, "lattice.local.yaml");
-  if (existsSync(localYaml)) {
-    copyFileSync(localYaml, join(targetDir, "lattice.local.yaml"));
-    console.log("  ✓ Copied lattice.local.yaml");
+  if (config.embedded.commands) {
+    const commandsDir = join(targetDir, ".opencode", "command");
+    mkdirSync(commandsDir, { recursive: true });
+    
+    for (const [name, content] of Object.entries(config.embedded.commands)) {
+      const filename = name.endsWith(".md") ? name : `${name}.md`;
+      writeFileSync(join(commandsDir, filename), content as string);
+      console.log(`  ✓ Extracted commands/${filename}`);
+    }
+  }
+
+  if (config.embedded.skills) {
+    const skillsDir = join(targetDir, ".opencode", "skill");
+    mkdirSync(skillsDir, { recursive: true });
+    
+    for (const [name, content] of Object.entries(config.embedded.skills)) {
+      const skillDir = join(skillsDir, name);
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(join(skillDir, "SKILL.md"), content as string);
+      console.log(`  ✓ Extracted skills/${name}/SKILL.md`);
+    }
   }
 }
 

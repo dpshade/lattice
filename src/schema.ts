@@ -121,6 +121,17 @@ const HooksSchema = z.object({
   on_error: z.array(HookActionSchema).optional(),
 }).strict();
 
+const EmbeddedContentSchema = z.object({
+  agents: z.record(z.string(), z.string()).optional(),
+  commands: z.record(z.string(), z.string()).optional(),
+  skills: z.record(z.string(), z.string()).optional(),
+}).strict();
+
+const FrozenMetadataSchema = z.object({
+  timestamp: z.string(),
+  source: z.string(),
+}).strict();
+
 export const LatticeConfigSchema = z
   .object({
     name: z.string().min(1),
@@ -137,6 +148,9 @@ export const LatticeConfigSchema = z
     mcp: z.record(z.string(), McpServerSchema).optional(),
     commands: z.record(z.string(), CommandSchema).optional(),
     hooks: HooksSchema.optional(),
+    
+    embedded: EmbeddedContentSchema.optional(),
+    _frozen: FrozenMetadataSchema.optional(),
   })
   .strict();
 
