@@ -210,6 +210,85 @@ async function cloneFromGitHub(source: string, targetDir: string): Promise<void>
   }
 }
 
+async function extractFromZip(zipPath: string, targetDir: string): Promise<void> {
+  console.log(`Extracting workflow from: ${zipPath}`);
+  
+  const { homedir } = await import("os");
+  const tempDir = join(homedir(), ".config", "opencode", ".lattice-tmp", `extract-${Date.now()}`);
+  mkdirSync(tempDir, { recursive: true });
+  
+  const proc = Bun.spawn(["unzip", "-q", zipPath, "-d", tempDir], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  
+  const exitCode = await proc.exited;
+  if (exitCode !== 0) {
+    throw new Error(`Failed to extract ZIP file`);
+  }
+
+  const latticeYaml = existsSync(join(tempDir, "lattice.yaml"))
+    ? join(tempDir, "lattice.yaml")
+    : existsSync(join(tempDir, "lattice.yml"))
+    ? join(tempDir, "lattice.yml")
+    : null;
+
+  if (!latticeYaml) {
+    throw new Error("ZIP file does not contain lattice.yaml");
+  }
+
+  copyFileSync(latticeYaml, join(targetDir, "lattice.yaml"));
+  console.log("  ✓ Extracted lattice.yaml");
+
+  let agentCount = 0;
+  let commandCount = 0;
+  let skillCount = 0;
+
+  const agentsDir = join(tempDir, "agents");
+  if (existsSync(agentsDir)) {
+    const targetAgentsDir = join(targetDir, "agents");
+    mkdirSync(targetAgentsDir, { recursive: true });
+    for (const file of readdirSync(agentsDir)) {
+      if (file.endsWith(".md")) {
+        copyFileSync(join(agentsDir, file), join(targetAgentsDir, file));
+        agentCount++;
+      }
+    }
+  }
+
+  const commandsDir = join(tempDir, "commands");
+  if (existsSync(commandsDir)) {
+    const targetCommandsDir = join(targetDir, ".opencode", "command");
+    mkdirSync(targetCommandsDir, { recursive: true });
+    for (const file of readdirSync(commandsDir)) {
+      if (file.endsWith(".md")) {
+        copyFileSync(join(commandsDir, file), join(targetCommandsDir, file));
+        commandCount++;
+      }
+    }
+  }
+
+  const skillsDir = join(tempDir, "skills");
+  if (existsSync(skillsDir)) {
+    for (const skillName of readdirSync(skillsDir)) {
+      const skillPath = join(skillsDir, skillName, "SKILL.md");
+      if (existsSync(skillPath)) {
+        const targetSkillDir = join(targetDir, ".opencode", "skill", skillName);
+        mkdirSync(targetSkillDir, { recursive: true });
+        copyFileSync(skillPath, join(targetSkillDir, "SKILL.md"));
+        skillCount++;
+      }
+    }
+  }
+
+  if (agentCount > 0) console.log(`  ✓ Extracted ${agentCount} agents`);
+  if (commandCount > 0) console.log(`  ✓ Extracted ${commandCount} commands`);
+  if (skillCount > 0) console.log(`  ✓ Extracted ${skillCount} skills`);
+
+  const { rmSync } = await import("fs");
+  rmSync(tempDir, { recursive: true, force: true });
+}
+
 async function cloneFromLocal(source: string, targetDir: string): Promise<void> {
   const sourcePath = source.startsWith("file:") ? source.slice(5) : source;
   const absolutePath = sourcePath.startsWith("/") ? sourcePath : join(process.cwd(), sourcePath);
@@ -221,6 +300,11 @@ async function cloneFromLocal(source: string, targetDir: string): Promise<void> 
   const stat = statSync(absolutePath);
   
   if (stat.isFile()) {
+    if (absolutePath.endsWith(".zip") || absolutePath.endsWith(".lattice.zip")) {
+      await extractFromZip(absolutePath, targetDir);
+      return;
+    }
+    
     console.log(`Copying workflow from: ${absolutePath}`);
     copyFileSync(absolutePath, join(targetDir, "lattice.yaml"));
     console.log("  ✓ Copied lattice.yaml");
@@ -306,11 +390,14 @@ export async function init(options: InitOptions = {}): Promise<void> {
   await snapshot({ name: `pre-init-${Date.now()}` });
 
   if (options.from) {
-    // Clone from source
     const source = options.from;
-    const isLocal = source.startsWith("file:") || source.startsWith("./") || source.startsWith("/") || source.startsWith("../");
+    const hasLocalPrefix = source.startsWith("file:") || 
+                           source.startsWith("./") || 
+                           source.startsWith("/") || 
+                           source.startsWith("../");
+    const isLocalSource = hasLocalPrefix || existsSync(source);
 
-    if (isLocal) {
+    if (isLocalSource) {
       await cloneFromLocal(source, targetDir);
     } else {
       await cloneFromGitHub(source, targetDir);

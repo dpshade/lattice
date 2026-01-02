@@ -1,0 +1,98 @@
+# lattice.yaml
+# The Dockerfile for AI coding workflows
+# Learn more: https://github.com/dpshade/lattice
+
+name: my-workflow
+description: "My AI coding workflow"
+version: 1.0.0
+
+# Version Control Strategy
+vcs:
+  preset: jj-workspace  # jj-workspace | jj-checkpoint | git-stash | none
+  config:
+    workspace_dir: .workspaces
+    gate_enforcement: true
+
+# Plugins (version-pinned)
+plugins:
+  - oh-my-opencode@2.3.1
+  # - jj-opencode@1.0.0
+
+# Providers
+providers:
+  anthropic:
+    env: ANTHROPIC_API_KEY
+    tier: pro
+  openai:
+    env: OPENAI_API_KEY
+    local_budget: 50
+  # ollama:
+  #   models:
+  #     - llama3.1:8b
+  #     - llama3.1:70b
+
+# Default routing for agents without explicit routing
+defaults:
+  agents_dir: ./agents
+  routing:
+    - anthropic/claude-sonnet-4-5
+    - openai/gpt-4o
+
+# Custom Agents
+agents:
+  architect:
+    path: architect.md
+    description: "High-level design and architecture"
+    triggers: [/architect, /design, /plan]
+    routing:
+      - anthropic/claude-opus-4-5
+      - openai/o3
+
+  quick:
+    path: quick.md
+    description: "Fast responses for simple questions"
+    triggers: [/q, /quick]
+    routing:
+      - anthropic/claude-haiku-4-5
+      - openai/gpt-4o-mini
+
+# MCP Servers
+mcp:
+  context7:
+    enabled: true
+    description: "Library documentation lookup"
+  websearch_exa:
+    enabled: true
+    description: "Real-time web search"
+  # custom_mcp:
+  #   enabled: true
+  #   command: "node ./mcp/my-server.js"
+  #   env:
+  #     API_KEY: "${MY_API_KEY}"
+
+# Plugin Configuration
+plugin_config:
+  oh-my-opencode:
+    disabled_hooks: []
+    # disabled_agents: [oracle]
+
+# Custom Commands
+commands:
+  ship:
+    description: "Push current work"
+    action: vcs.push
+  undo:
+    description: "Undo last action"
+    action: vcs.undo
+
+# Lifecycle Hooks
+hooks:
+  pre_agent:
+    - action: vcs.checkpoint
+      when: always
+  post_agent:
+    - action: vcs.commit
+      when: files_changed
+  on_rate_limit:
+    - action: route.fallback
+      notify: true

@@ -20,3 +20,10 @@ coverage/
 
 # Generated configs (users generate their own)
 .opencode/
+
+
+# Generated exports (may contain secrets)
+workflow.lattice.yaml
+workflow.lattice.zip
+*.lattice.yaml
+*.lattice.zip

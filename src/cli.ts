@@ -4,6 +4,7 @@ import { init } from "./commands/init";
 import { generate } from "./commands/generate";
 import { snapshot } from "./commands/snapshot";
 import { status } from "./commands/status";
+import { exportWorkflow, type ExportFormat } from "./commands/export";
 
 const HELP = `
 lattice - The Dockerfile for AI coding workflows
@@ -11,9 +12,10 @@ lattice - The Dockerfile for AI coding workflows
 Usage: lattice <command> [options]
 
 Commands:
-  init [--from <source>]    Initialize lattice.yaml (optionally from a workflow)
-  generate                  Generate opencode.json and oh-my-opencode.json from lattice.yaml
-  snapshot [--name <name>]  Backup current config before changes
+  init [--from <source>]    Initialize from a workflow (.zip, .yaml, or GitHub)
+  export [--format zip|yaml] Export current workflow for sharing
+  generate                  Generate opencode.json and oh-my-opencode.json
+  snapshot [--name <name>]  Backup current config (for recovery)
   status                    Show current workflow status
 
 Options:
@@ -22,10 +24,11 @@ Options:
 
 Examples:
   lattice init                           Create a new lattice.yaml template
-  lattice init --from dpshade/workflow   Clone workflow from GitHub
-  lattice init --from ./local-workflow   Clone from local directory
-  lattice generate                       Generate configs from lattice.yaml
-  lattice snapshot                       Backup current configs
+  lattice init --from workflow.lattice.zip  Install from ZIP
+  lattice init --from workflow.yaml      Install from YAML
+  lattice init --from dpshade/workflow   Clone from GitHub
+  lattice export                         Export as ZIP (default)
+  lattice export --format yaml           Export as single YAML file
 `;
 
 async function main() {
@@ -48,6 +51,9 @@ async function main() {
     switch (command) {
       case "init":
         await handleInit(commandArgs);
+        break;
+      case "export":
+        await handleExport(commandArgs);
         break;
       case "generate":
         await generate();
@@ -92,6 +98,21 @@ async function handleSnapshot(args: string[]) {
   });
 
   await snapshot({ name: values.name });
+}
+
+async function handleExport(args: string[]) {
+  const { values } = parseArgs({
+    args,
+    options: {
+      format: { type: "string", short: "f" },
+      name: { type: "string", short: "n" },
+      output: { type: "string", short: "o" },
+    },
+    allowPositionals: false,
+  });
+
+  const format = (values.format === "yaml" ? "yaml" : "zip") as ExportFormat;
+  await exportWorkflow({ format, name: values.name, output: values.output });
 }
 
 main();
