@@ -18,6 +18,8 @@ export class ConfigError extends Error {
 const CONFIG_FILENAMES = ["lattice.yaml", "lattice.yml"] as const;
 const LOCAL_OVERRIDE_FILENAMES = ["lattice.local.yaml", "lattice.local.yml"] as const;
 
+// --- Helper Functions (extracted to reduce cyclomatic complexity) ---
+
 function findConfigFile(dir: string, filenames: readonly string[]): string | null {
   for (const filename of filenames) {
     const filepath = join(dir, filename);
@@ -45,14 +47,7 @@ function deepMerge(base: Record<string, unknown>, override: Record<string, unkno
     const baseVal = base[key];
     const overrideVal = override[key];
 
-    if (
-      typeof baseVal === "object" &&
-      baseVal !== null &&
-      !Array.isArray(baseVal) &&
-      typeof overrideVal === "object" &&
-      overrideVal !== null &&
-      !Array.isArray(overrideVal)
-    ) {
+    if (isPlainObject(baseVal) && isPlainObject(overrideVal)) {
       result[key] = deepMerge(
         baseVal as Record<string, unknown>,
         overrideVal as Record<string, unknown>
@@ -64,6 +59,74 @@ function deepMerge(base: Record<string, unknown>, override: Record<string, unkno
 
   return result;
 }
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// --- Config Loading Helpers ---
+
+interface ConfigLoadState {
+  mergedConfig: Record<string, unknown>;
+  sources: LoadConfigResult["sources"];
+}
+
+function loadGlobalConfig(globalDir: string, state: ConfigLoadState): void {
+  const globalPath = findConfigFile(globalDir, CONFIG_FILENAMES);
+  if (!globalPath) return;
+
+  const globalConfig = parseYamlFile(globalPath);
+  if (isPlainObject(globalConfig)) {
+    state.mergedConfig = globalConfig;
+    state.sources.global = globalPath;
+  }
+}
+
+function loadProjectConfig(projectDir: string, state: ConfigLoadState): void {
+  const projectPath = findConfigFile(projectDir, CONFIG_FILENAMES);
+  if (!projectPath) return;
+
+  const projectConfig = parseYamlFile(projectPath);
+  if (isPlainObject(projectConfig)) {
+    state.mergedConfig = deepMerge(state.mergedConfig, projectConfig);
+    state.sources.project = projectPath;
+  }
+}
+
+function loadLocalOverrides(projectDir: string, state: ConfigLoadState): void {
+  const localPath = findConfigFile(projectDir, LOCAL_OVERRIDE_FILENAMES);
+  if (!localPath) return;
+
+  const localConfig = parseYamlFile(localPath);
+  if (isPlainObject(localConfig)) {
+    state.mergedConfig = deepMerge(state.mergedConfig, localConfig);
+    state.sources.local = localPath;
+  }
+}
+
+function validateMergedConfig(state: ConfigLoadState, projectDir: string, globalDir: string): LatticeConfig {
+  if (Object.keys(state.mergedConfig).length === 0 && Object.keys(state.sources).length === 0) {
+    throw new ConfigError(
+      `No lattice config found. Searched:\n  - ${projectDir}\n  - ${globalDir}`,
+      projectDir
+    );
+  }
+
+  const result = LatticeConfigSchema.safeParse(state.mergedConfig);
+
+  if (!result.success) {
+    const errorPath = state.sources.local ?? state.sources.project ?? state.sources.global;
+    throw new ConfigError(
+      `Invalid lattice config: ${result.error.message}`,
+      errorPath,
+      result.error.errors
+    );
+  }
+
+  return result.data;
+}
+
+// --- Public API ---
 
 export interface LoadConfigOptions {
   projectDir?: string;
@@ -85,70 +148,40 @@ export function loadConfig(options: LoadConfigOptions = {}): LoadConfigResult {
   const projectDir = options.projectDir ?? process.cwd();
   const globalDir = options.globalDir ?? join(homedir(), ".config", "lattice");
 
-  const sources: LoadConfigResult["sources"] = {};
-  let mergedConfig: Record<string, unknown> = {};
+  const state: ConfigLoadState = {
+    mergedConfig: {},
+    sources: {},
+  };
 
   if (!options.skipGlobal) {
-    const globalPath = findConfigFile(globalDir, CONFIG_FILENAMES);
-    if (globalPath) {
-      const globalConfig = parseYamlFile(globalPath);
-      if (globalConfig && typeof globalConfig === "object") {
-        mergedConfig = globalConfig as Record<string, unknown>;
-        sources.global = globalPath;
-      }
-    }
+    loadGlobalConfig(globalDir, state);
   }
 
-  const projectPath = findConfigFile(projectDir, CONFIG_FILENAMES);
-  if (projectPath) {
-    const projectConfig = parseYamlFile(projectPath);
-    if (projectConfig && typeof projectConfig === "object") {
-      mergedConfig = deepMerge(mergedConfig, projectConfig as Record<string, unknown>);
-      sources.project = projectPath;
-    }
-  }
+  loadProjectConfig(projectDir, state);
 
   if (!options.skipLocal) {
-    const localPath = findConfigFile(projectDir, LOCAL_OVERRIDE_FILENAMES);
-    if (localPath) {
-      const localConfig = parseYamlFile(localPath);
-      if (localConfig && typeof localConfig === "object") {
-        mergedConfig = deepMerge(mergedConfig, localConfig as Record<string, unknown>);
-        sources.local = localPath;
-      }
-    }
+    loadLocalOverrides(projectDir, state);
   }
 
-  if (Object.keys(mergedConfig).length === 0 && Object.keys(sources).length === 0) {
-    throw new ConfigError(
-      `No lattice config found. Searched:\n  - ${projectDir}\n  - ${globalDir}`,
-      projectDir
-    );
-  }
-
-  const result = LatticeConfigSchema.safeParse(mergedConfig);
-
-  if (!result.success) {
-    const errorPath = sources.local ?? sources.project ?? sources.global;
-    throw new ConfigError(
-      `Invalid lattice config: ${result.error.message}`,
-      errorPath,
-      result.error.errors
-    );
-  }
-
-  return { config: result.data, sources };
+  const config = validateMergedConfig(state, projectDir, globalDir);
+  return { config, sources: state.sources };
 }
 
 export function parseConfigString(yamlContent: string, filepath?: string): LatticeConfig {
-  let parsed: unknown;
+  const parsed = parseYamlSafe(yamlContent, filepath);
+  return validateParsedConfig(parsed, filepath);
+}
+
+function parseYamlSafe(yamlContent: string, filepath?: string): unknown {
   try {
-    parsed = parseYaml(yamlContent);
+    return parseYaml(yamlContent);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new ConfigError(`Invalid YAML syntax: ${message}`, filepath);
   }
+}
 
+function validateParsedConfig(parsed: unknown, filepath?: string): LatticeConfig {
   const result = LatticeConfigSchema.safeParse(parsed);
 
   if (!result.success) {
