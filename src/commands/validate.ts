@@ -26,19 +26,53 @@ function validateAgentFiles(
   result: ValidationResult,
   log: Logger
 ): void {
-  if (!config.agents) return;
+  // Validate paths.agents directories exist
+  if (config.paths?.agents) {
+    for (const agentPath of config.paths.agents) {
+      const fullPath = agentPath.startsWith("/") ? agentPath : join(projectDir, agentPath);
+      if (!existsSync(fullPath)) {
+        result.warnings.push(`Agent directory not found: ${agentPath}`);
+        log(`⚠ Agent directory not found: ${agentPath}`);
+      } else {
+        log(`✓ Agent directory: ${agentPath}`);
+      }
+    }
+  }
 
-  const agentsDir = config.defaults?.agents_dir || "./agents";
-  const resolvedAgentsDir = join(projectDir, agentsDir);
+  // Validate explicitly defined agents with paths
+  if (config.agents) {
+    // Determine base directory for agent paths
+    const agentPaths = config.paths?.agents ?? 
+      (config.defaults?.agents_dir ? [config.defaults.agents_dir] : ["./agents"]);
 
-  for (const [name, agentConfig] of Object.entries(config.agents)) {
-    const agentPath = join(resolvedAgentsDir, agentConfig.path);
-    if (!existsSync(agentPath)) {
-      result.errors.push(`Agent file missing: ${agentConfig.path} (agent: ${name})`);
-      result.valid = false;
-      log(`✗ Agent "${name}": file not found at ${agentPath}`);
-    } else {
-      log(`✓ Agent "${name}": ${agentConfig.path}`);
+    for (const [name, agentConfig] of Object.entries(config.agents)) {
+      if (agentConfig.path) {
+        // Agent has explicit path - try to find it
+        let found = false;
+        for (const basePath of agentPaths) {
+          const resolvedBase = basePath.startsWith("/") ? basePath : join(projectDir, basePath);
+          const agentFilePath = join(resolvedBase, agentConfig.path);
+          if (existsSync(agentFilePath)) {
+            found = true;
+            log(`✓ Agent "${name}": ${agentConfig.path}`);
+            break;
+          }
+        }
+        if (!found) {
+          // Also try relative to project root
+          const directPath = join(projectDir, agentConfig.path);
+          if (existsSync(directPath)) {
+            log(`✓ Agent "${name}": ${agentConfig.path}`);
+          } else {
+            result.errors.push(`Agent file missing: ${agentConfig.path} (agent: ${name})`);
+            result.valid = false;
+            log(`✗ Agent "${name}": file not found: ${agentConfig.path}`);
+          }
+        }
+      } else {
+        // Agent without explicit path - will be discovered from paths.agents
+        log(`○ Agent "${name}": config override (discovered from paths)`);
+      }
     }
   }
 }
@@ -55,7 +89,7 @@ function validateTriggerCollisions(
   for (const [name, agentConfig] of Object.entries(config.agents)) {
     if (agentConfig.triggers) {
       for (const trigger of agentConfig.triggers) {
-        const normalized = trigger.startsWith("/") ? trigger : `/${trigger}`;
+        const normalized = trigger.startsWith("@") ? trigger : `@${trigger}`;
         const existing = triggerMap.get(normalized) || [];
         existing.push(name);
         triggerMap.set(normalized, existing);
@@ -211,6 +245,41 @@ function validateVcsPreset(
   }
 }
 
+function validatePaths(
+  config: LatticeConfig,
+  projectDir: string,
+  result: ValidationResult,
+  log: Logger
+): void {
+  if (!config.paths) return;
+
+  // Validate skills directories
+  if (config.paths.skills) {
+    for (const skillPath of config.paths.skills) {
+      const fullPath = skillPath.startsWith("/") ? skillPath : join(projectDir, skillPath);
+      if (!existsSync(fullPath)) {
+        result.warnings.push(`Skills directory not found: ${skillPath}`);
+        log(`⚠ Skills directory not found: ${skillPath}`);
+      } else {
+        log(`✓ Skills directory: ${skillPath}`);
+      }
+    }
+  }
+
+  // Validate commands directories
+  if (config.paths.commands) {
+    for (const cmdPath of config.paths.commands) {
+      const fullPath = cmdPath.startsWith("/") ? cmdPath : join(projectDir, cmdPath);
+      if (!existsSync(fullPath)) {
+        result.warnings.push(`Commands directory not found: ${cmdPath}`);
+        log(`⚠ Commands directory not found: ${cmdPath}`);
+      } else {
+        log(`✓ Commands directory: ${cmdPath}`);
+      }
+    }
+  }
+}
+
 async function validatePlugins(
   config: LatticeConfig,
   result: ValidationResult,
@@ -297,6 +366,8 @@ export async function validate(options: ValidateOptions = {}): Promise<Validatio
   validateRoutingModels(config, result, log);
   log("");
   validateMcpServers(config, result, log);
+  log("");
+  validatePaths(config, projectDir, result, log);
   log("");
   validateVcsPreset(config, result, log);
   log("");

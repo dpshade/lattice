@@ -31,27 +31,39 @@ providers:
   #     - llama3.1:8b
   #     - llama3.1:70b
 
+# Paths to scan for agents, skills, and commands
+# Earlier paths take priority when names collide
+paths:
+  agents:
+    - ./agents
+    # - ./shared/agents
+  skills:
+    - ./skills
+  commands:
+    - ./commands
+
 # Default routing for agents without explicit routing
 defaults:
-  agents_dir: ./agents
   routing:
     - anthropic/claude-sonnet-4-5
     - openai/gpt-4o
 
 # Custom Agents
+# These override frontmatter in discovered agent files
 agents:
   architect:
-    path: architect.md
+    # path: architect.md  # optional if discovered from paths.agents
+    model: anthropic/claude-opus-4-5  # overrides frontmatter
     description: "High-level design and architecture"
-    triggers: [/architect, /design, /plan]
+    triggers: ["@architect", "@design", "@plan"]
     routing:
       - anthropic/claude-opus-4-5
       - openai/o3
 
   quick:
-    path: quick.md
+    model: anthropic/claude-haiku-4-5
     description: "Fast responses for simple questions"
-    triggers: [/q, /quick]
+    triggers: ["@q", "@quick"]
     routing:
       - anthropic/claude-haiku-4-5
       - openai/gpt-4o-mini

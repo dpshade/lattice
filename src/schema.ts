@@ -71,13 +71,20 @@ const ProviderSchema = z.object({
   models: z.array(z.string()).optional(),
 });
 
+const PathsSchema = z.object({
+  agents: z.array(z.string()).optional(),
+  skills: z.array(z.string()).optional(),
+  commands: z.array(z.string()).optional(),
+});
+
 const DefaultsSchema = z.object({
-  agents_dir: z.string().optional(),
+  agents_dir: z.string().optional(), // deprecated, use paths.agents
   routing: AgentRouting.optional(),
 });
 
 const AgentSchema = z.object({
-  path: z.string(),
+  path: z.string().optional(), // optional if discovered from paths.agents
+  model: z.string().optional(), // overrides frontmatter model
   description: z.string().optional(),
   triggers: z.array(z.string()).optional(),
   routing: AgentRouting.optional(),
@@ -142,6 +149,7 @@ export const LatticeConfigSchema = z
     vcs: VcsSchema.optional(),
     plugins: z.array(PluginRef).optional(),
     providers: z.record(z.string(), ProviderSchema).optional(),
+    paths: PathsSchema.optional(),
     defaults: DefaultsSchema.optional(),
     agents: z.record(z.string(), AgentSchema).optional(),
     plugin_config: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
@@ -159,6 +167,7 @@ export type VcsConfig = z.infer<typeof VcsSchema>;
 export type VcsPresetType = z.infer<typeof VcsPreset>;
 export type ProviderConfig = z.infer<typeof ProviderSchema>;
 export type AgentConfig = z.infer<typeof AgentSchema>;
+export type PathsConfig = z.infer<typeof PathsSchema>;
 export type RoutingConfigType = z.infer<typeof RoutingConfig>;
 export type McpServerConfig = z.infer<typeof McpServerSchema>;
 export type CommandConfig = z.infer<typeof CommandSchema>;
@@ -166,4 +175,4 @@ export type HookAction = z.infer<typeof HookActionSchema>;
 export type HooksConfig = z.infer<typeof HooksSchema>;
 export type DefaultsConfig = z.infer<typeof DefaultsSchema>;
 
-export { RoutingConfig, SimpleRouting, AgentRouting, HooksSchema };
+export { RoutingConfig, SimpleRouting, AgentRouting, HooksSchema, PathsSchema };

@@ -1,8 +1,9 @@
-import { existsSync, writeFileSync, mkdirSync, readFileSync } from "fs";
-import { join } from "path";
+import { existsSync, writeFileSync, mkdirSync, readFileSync, copyFileSync } from "fs";
+import { join, relative, dirname } from "path";
 import { homedir } from "os";
 import { loadConfig, type LoadConfigResult } from "../config";
 import type { LatticeConfig } from "../schema";
+import { scanAgentsPaths, parseFrontmatter, type ParsedAgent } from "../frontmatter";
 
 interface OpencodeConfig {
   $schema: string;
@@ -323,6 +324,132 @@ async function installPlugins(plugins: string[], configDir: string): Promise<voi
   }
 }
 
+interface MergedAgent {
+  name: string;
+  path: string;
+  model?: string;
+  description?: string;
+  triggers?: string[];
+  content: string;
+}
+
+/**
+ * Discover and merge agents from paths.agents directories with config overrides.
+ */
+function discoverAgents(config: LatticeConfig, projectDir: string): MergedAgent[] {
+  const agents: MergedAgent[] = [];
+  const seenNames = new Set<string>();
+
+  // Get paths from config (support both new paths.agents and deprecated defaults.agents_dir)
+  const agentPaths: string[] = config.paths?.agents ?? 
+    (config.defaults?.agents_dir ? [config.defaults.agents_dir] : []);
+
+  if (agentPaths.length === 0) {
+    // No paths configured, fall back to loading explicitly defined agents
+    if (config.agents) {
+      for (const [name, agentConfig] of Object.entries(config.agents)) {
+        if (agentConfig.path) {
+          const fullPath = agentConfig.path.startsWith("/") 
+            ? agentConfig.path 
+            : join(projectDir, agentConfig.path);
+          
+          if (existsSync(fullPath)) {
+            const content = readFileSync(fullPath, "utf-8");
+            const { frontmatter, content: body } = parseFrontmatter(content);
+
+            agents.push({
+              name,
+              path: fullPath,
+              model: agentConfig.model ?? frontmatter.model,
+              description: agentConfig.description ?? frontmatter.description,
+              triggers: agentConfig.triggers ?? frontmatter.triggers,
+              content: body,
+            });
+            seenNames.add(name);
+          }
+        }
+      }
+    }
+    return agents;
+  }
+
+  // Scan all paths.agents directories
+  const discovered = scanAgentsPaths(agentPaths, projectDir);
+
+  // Merge discovered agents with config overrides
+  for (const agent of discovered) {
+    const configOverride = config.agents?.[agent.name];
+    
+    agents.push({
+      name: agent.name,
+      path: agent.path,
+      model: configOverride?.model ?? agent.frontmatter.model,
+      description: configOverride?.description ?? agent.frontmatter.description,
+      triggers: configOverride?.triggers ?? agent.frontmatter.triggers,
+      content: agent.content,
+    });
+    seenNames.add(agent.name);
+  }
+
+  // Add any agents defined in config but not discovered (explicit path)
+  if (config.agents) {
+    for (const [name, agentConfig] of Object.entries(config.agents)) {
+      if (seenNames.has(name)) continue;
+
+      if (agentConfig.path) {
+        const fullPath = agentConfig.path.startsWith("/")
+          ? agentConfig.path
+          : join(projectDir, agentConfig.path);
+
+        if (existsSync(fullPath)) {
+          const content = readFileSync(fullPath, "utf-8");
+          const { frontmatter, content: body } = parseFrontmatter(content);
+
+          agents.push({
+            name,
+            path: fullPath,
+            model: agentConfig.model ?? frontmatter.model,
+            description: agentConfig.description ?? frontmatter.description,
+            triggers: agentConfig.triggers ?? frontmatter.triggers,
+            content: body,
+          });
+        }
+      }
+    }
+  }
+
+  return agents;
+}
+
+/**
+ * Write agent files to .opencode/agent/ with merged frontmatter.
+ */
+function writeAgentFiles(agents: MergedAgent[], projectDir: string): void {
+  const agentDir = join(projectDir, ".opencode", "agent");
+  mkdirSync(agentDir, { recursive: true });
+
+  for (const agent of agents) {
+    // Build frontmatter
+    const frontmatterLines: string[] = [];
+    if (agent.model) frontmatterLines.push(`model: ${agent.model}`);
+    if (agent.description) frontmatterLines.push(`description: "${agent.description}"`);
+    if (agent.triggers && agent.triggers.length > 0) {
+      frontmatterLines.push(`triggers: [${agent.triggers.join(", ")}]`);
+    }
+
+    let fileContent: string;
+    if (frontmatterLines.length > 0) {
+      fileContent = `---\n${frontmatterLines.join("\n")}\n---\n${agent.content}`;
+    } else {
+      fileContent = agent.content;
+    }
+
+    const outputPath = join(agentDir, `${agent.name}.md`);
+    writeFileSync(outputPath, fileContent);
+    console.log(`  ✓ Agent: ${agent.name}.md${agent.model ? ` (model: ${agent.model})` : ""}`);
+  }
+}
+
 export async function generate(): Promise<void> {
   const projectDir = process.cwd();
   const globalConfigDir = join(homedir(), ".config", "opencode");
@@ -353,9 +480,9 @@ export async function generate(): Promise<void> {
     opencodeConfig.providers = providers;
   }
 
-  const agents = generateOpencodeAgents(config);
-  if (agents) {
-    opencodeConfig.agents = agents;
+  const opcodeAgents = generateOpencodeAgents(config);
+  if (opcodeAgents) {
+    opencodeConfig.agents = opcodeAgents;
   }
 
   const projectOpencodeDir = join(projectDir, ".opencode");
@@ -364,6 +491,13 @@ export async function generate(): Promise<void> {
   const opencodeJsonPath = join(projectOpencodeDir, "opencode.json");
   writeFileSync(opencodeJsonPath, JSON.stringify(opencodeConfig, null, 2));
   console.log(`  ✓ Generated ${opencodeJsonPath}`);
+
+  // Discover and write agent files
+  const agents = discoverAgents(config, projectDir);
+  if (agents.length > 0) {
+    console.log("\nWriting agent files...");
+    writeAgentFiles(agents, projectDir);
+  }
 
   const omoConfig = generateOhMyOpencodeConfig(config);
 
@@ -394,7 +528,7 @@ export async function generate(): Promise<void> {
     console.log(`  MCP servers: ${Object.keys(mcpServers).join(", ")}`);
   }
 
-  if (config.agents) {
-    console.log(`  Agents defined: ${Object.keys(config.agents).join(", ")}`);
+  if (agents.length > 0) {
+    console.log(`  Agents: ${agents.map(a => a.name).join(", ")}`);
   }
 }
